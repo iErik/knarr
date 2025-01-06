@@ -1,264 +1,52 @@
 package knarr
 
-import "core:sync/chan"
-
 import "core:fmt"
-import "core:strings"
-import sys "core:sys/linux"
-import dyn "core:dynlib"
-
-import "core:slice"
-import "core:sys/posix"
 import "core:encoding/json"
-import "core:c/libc"
+import "core:sync/chan"
+import sys "core:sys/linux"
 
-import "core:encoding/ansi"
 import glfw "vendor:glfw"
 
+
 Win :: glfw.WindowHandle
-DLLExt :: dyn.LIBRARY_FILE_EXTENSION
 Err :: sys.Errno
-
-FakeSet :: map[string]struct{}
-
-add_keys :: proc (keys: []string, dest: ^FakeSet) {
-  for key in keys do dest[key] = {}
-}
 
 HMROptions :: struct {
   pkgPath:   string,
   pkgName:   string,
   outDir:    string,
   extradirs: []string,
-  pkgSuffix: string,
-  pkgPrefix: string,
+  pkgSuffix: string, //#
+  pkgPrefix: string, // #
 
-  buildArgs: string,
+  buildArgs: string, // #
   collections: []string,
 
-  __version: i32
+  __version: i32 // #
 }
 
-PackageApi :: struct {
-	lib: dyn.Library,
-  ctx: rawptr,
 
-	init_window: proc() -> (win: Win, ok: bool),
-  init_context: proc() -> (ctx: rawptr, ok: bool),
-  setup: proc (ctx: rawptr),
-  window: proc(ctx: rawptr) -> Win,
+watch :: proc (options: TaskOptions) {
+  odin_opts := OdinOptions {
+    pkgRoot = options.pkgRoot,
+    pkgName = options.pkgName,
+    outDir  = options.tempDir,
+    collections = options.collections,
 
-  fresh_start: proc() -> (ctx: rawptr, ok: bool),
+    pkgPrefix = "tmp_",
+    pkgSuffix = "_hmr",
+    version   = 0,
 
-  should_loop: proc(ctx: rawptr) -> bool,
-	update: proc(ctx: rawptr),
-  render: proc(ctx: rawptr),
-  reload: proc(ctx: rawptr) -> (ok: bool),
-
-  destroy: proc(ctx: rawptr),
-	shutdown_window: proc(win: Win),
-}
-
-BuildOpts :: struct {
-  pkgPath:   string,
-  pkgName:   string,
-  outDir:    string,
-  pkgSuffix: string,
-  pkgPrefix: string,
-  extraArgs: string,
-  collections: []string
-}
-
-BuildResult :: struct {
-  output: json.Value,
-  parseErr: json.Error,
-  status: i32
-}
-
-odin_build :: proc (using opts: HMROptions) -> (
-  result: BuildResult,
-  err: Err
-) {
-  finalPkgName := fmt.tprintf("%v%v%v_%d",
-    pkgPrefix,
-    pkgName,
-    pkgSuffix,
-    __version)
-
-  cmd := strjoin({
-    strcat({"odin build ", pkgPath}),
-    strcat({"-out:", outDir, finalPkgName}),
-    "-build-mode:dynamic",
-    "-debug",
-    "-json-errors",
-    buildArgs
-  }, " ")
-
-  print_info("Building target...")
-  print_info("Pkg name: %v EXT: %v", finalPkgName, DLLExt)
-  ret := run_cmd(cmd) or_return
-
-  data, error := json.parse_string(ret.output)
-
-  result.status = ret.status
-  result.output = data
-  result.parseErr = error
-  print_msg("Package built.")
-  print_info("Build output: %v\n", data)
-
-  return
-}
-
-odin_run :: proc (using opts: HMROptions) -> (
-  result: BuildResult,
-  err: Err
-) {
-  finalPkgName := fmt.tprintf("%v%v%v_%d",
-    pkgPrefix,
-    pkgName,
-    pkgSuffix,
-    __version)
-
-  cmd := strjoin({
-    strcat({"odin build ", pkgPath}),
-    strcat({"-out:", outDir, finalPkgName}),
-    "-build-mode:dynamic",
-    "-debug",
-    "-json-errors",
-    buildArgs
-  }, " ")
-
-  print_info("Building target...")
-  ret := run_cmd(cmd) or_return
-
-  data, error := json.parse_string(ret.output)
-
-  result.status = ret.status
-  result.output = data
-  result.parseErr = error
-  print_msg("Package built.")
-  print_info("Build output: %v\n", data)
-
-  return
-}
-
-kickoff_target :: proc (opts: HMROptions) -> Err {
-  stat :sys.Stat
-  err := sys.lstat(".tmp/", &stat)
-
-  if err == .ENOENT {
-    dirErr := sys.mkdir(".tmp", {
-      .IFDIR,
-      .IRUSR,
-      .IWUSR,
-      .IXUSR
-    })
-
-    if dirErr != .NONE {
-      print_err(
-        "Could not create temporary directory: %s", dirErr)
-      return dirErr
-    }
-
-  } else if err != .NONE {
-    print_err("Could not load target project: %s", err)
-    return err
+    extraArgs = strjoin({
+      "-build-mode:dynamic",
+      "-debug",
+      "-json-errors",
+    }, " ")
   }
 
-  odin_build(opts) or_return
-
-  return .NONE
-}
-
-load_target :: proc (opts: HMROptions) -> (
-  api: ^PackageApi,
-  err: Err
-) {
-  api = new(PackageApi)
-
-  dll_name := fmt.tprintf("%v%v%v%v_%d.%v",
-    opts.outDir,
-    opts.pkgPrefix,
-    opts.pkgName,
-    opts.pkgSuffix,
-    opts.__version,
-    DLLExt)
-
-  print_info("Loading DLL: %v ...\n", dll_name)
-
-  _, ok := dyn.initialize_symbols(api, dll_name, "", "lib")
-
-  if !ok {
-    print_err("Could not load library")
-    err = .ELIBACC
-  }
-
-  print_msg("DLL loaded sucessfully")
-
-  return
-}
-
-reload_target :: proc (
-  ctx: rawptr,
-  opts: HMROptions
-) -> (api: ^PackageApi, err: Err) {
-
-  dll_name := fmt.tprintf("%v%v%v%v_%d.%v",
-    opts.outDir,
-    opts.pkgPrefix,
-    opts.pkgName,
-    opts.pkgSuffix,
-    opts.__version,
-    DLLExt)
-
-  api = new(PackageApi)
-  print_info("Reloading DLL: %v ...\n", dll_name)
-
-  _, ok := dyn.initialize_symbols(api, dll_name, "", "lib")
-
-  if !ok {
-    err = .ELIBACC
-
-    print_err("Failed to initialize library symbols: %v",
-      dyn.last_error())
-
-    return
-  }
-
-  api.ctx = ctx
-  reload_ok := api.reload(ctx)
-
-  if !reload_ok {
-    print_err("Could not reload library!")
-    err = .ELIBACC
-    return
-  }
-
-  print_msg("DLL reloaded sucessfully")
-
-  return
-}
-
-unload_target :: proc (api: ^PackageApi) -> Err {
-  ok := dyn.unload_library(api.lib)
-
-  if !ok {
-    print_err("Failed to unload library: %v",
-      dyn.last_error())
-    return .ECANCELED
-  }
-
-  print_msg("Library unloaded sucessfully")
-
-  return .NONE
-}
-
-watch :: proc (options: HMROptions) {
-  options := options
-  options.__version = 0
-
-  kErr := kickoff_target(options)
-  api, api_err := load_target(options)
+  result, cmd_err := odin_do(.BUILD, odin_opts)
+  api, api_err := load_target(odin_opts)
+  output, js_err := json.parse_string(result.output)
 
   if api_err != .NONE {
     print_err(
@@ -268,25 +56,17 @@ watch :: proc (options: HMROptions) {
     return
   }
 
-  print_info("Initializing context...")
   ctx, err := api.fresh_start()
   api.ctx = ctx
-  options.__version += 1
-  print_info("Context Initialized")
+  odin_opts.version += 1
 
   listener :EventHandler = proc (
     ev: InotifyEv,
     ch: chan.Chan(bool)
-  ) {
-    print_info("I've received an event: %v", ev)
+  ) { ok := chan.try_send(ch, true) }
 
-    ok := chan.try_send(ch, true)
-    print_info("Try send status: %v", ok)
-  }
-
-  print_info("Setting up watcher")
-  dirSet := FakeSet{ options.pkgPath = {} }
-  add_keys(options.extradirs, &dirSet)
+  dirSet := FakeSet{ options.pkgRoot = {} }
+  add_keys(options.watchDirs, &dirSet)
   paths, _ := map_keys(dirSet)
 
   thr, chn, wErr := async_watch(paths, listener)
@@ -300,14 +80,14 @@ watch :: proc (options: HMROptions) {
 
     if should_reload {
       print_info("Application should reload now!")
-      odin_build(options)
-      new_api, errno := reload_target(api.ctx, options)
+      odin_do(.BUILD, odin_opts)
+      new_api, errno := reload_target(api.ctx, odin_opts)
 
       if errno != .NONE {
         print_err("Could not reload target: %s", err)
       }
 
-      options.__version += 1
+      odin_opts.version += 1
     }
 
     api.update(api.ctx)
@@ -315,7 +95,64 @@ watch :: proc (options: HMROptions) {
   }
 }
 
+run :: proc (options: TaskOptions) {
+  odin_opts := OdinOptions {
+    pkgRoot = options.pkgRoot,
+    pkgName = options.pkgName,
+    outDir  = options.tempDir,
+    collections = options.collections,
+
+    pkgPrefix = "tmp_",
+    pkgSuffix = "",
+    version   = 0,
+
+    extraArgs = "-debug"
+  }
+
+  fmt.printfln("Running...")
+  odin_do(.RUN, odin_opts)
+
+  return
+}
+
+build :: proc (options: TaskOptions) {
+  odin_opts := OdinOptions {
+    pkgRoot = options.pkgRoot,
+    pkgName = options.pkgName,
+    outDir  = options.outDir,
+    collections = options.collections,
+
+    pkgPrefix = "tmp_",
+    pkgSuffix = "",
+    version   = 0,
+
+    extraArgs = ""
+  }
+
+  fmt.printfln("Building...")
+  odin_do(.BUILD, odin_opts)
+
+  return
+}
+
 main :: proc () {
+  task, options, ok := get_args()
+
+  fmt.printfln("Task: %s", task)
+  fmt.printfln("Options: %v", options)
+
+  if !ok do return
+
+  switch task {
+    case .BUILD: build(options)
+    case .WATCH: watch(options)
+    case .RUN:   run(options)
+    case .INSTALL:
+  }
+
+  return
+}
+
   /*
   options := HMROptions {
     pkgPath   = "./src",
@@ -335,5 +172,3 @@ main :: proc () {
   watch(options)
   */
 
-  get_args()
-}

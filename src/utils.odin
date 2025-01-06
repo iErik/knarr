@@ -8,6 +8,8 @@ import "core:slice"
 import "core:sys/posix"
 import sys "core:sys/linux"
 
+import "core:os"
+
 strcat   :: strings.concatenate
 strjoin  :: strings.join
 strcclone :: strings.clone_to_cstring
@@ -86,7 +88,6 @@ run_cmd :: proc (cmd: string) -> (
   if pipe == nil {
     print_err("Couldn't spawn command %v", cmd)
     err = sys.Errno(posix.get_errno())
-    //err = .ENOMEM
     return
   }
 
@@ -103,3 +104,24 @@ run_cmd :: proc (cmd: string) -> (
   result.status = posix.pclose(pipe)
   return
 }
+
+ensure_dir_exists :: proc (dirname: string) -> (ok: bool) {
+  if os.is_dir(dirname) do return true
+  err := os.make_directory(dirname)
+
+  if err != os.ERROR_NONE {
+    fmt.printfln("Failed to create directory \"%v\": %s",
+      dirname, err)
+
+    return false
+  }
+
+  return true
+}
+
+FakeSet :: map[string]struct{}
+
+add_keys :: proc (keys: []string, dest: ^FakeSet) {
+  for key in keys do dest[key] = {}
+}
+
