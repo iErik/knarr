@@ -4,16 +4,18 @@ import "core:fmt"
 import dyn "core:dynlib"
 import sys "core:sys/linux"
 
+import "root:print"
+
+
+
 DLLExt :: dyn.LIBRARY_FILE_EXTENSION
 
 PackageApi :: struct {
 	lib: dyn.Library,
   ctx: rawptr,
 
-	init_window: proc() -> (win: Win, ok: bool),
   init_context: proc() -> (ctx: rawptr, ok: bool),
   setup: proc (ctx: rawptr),
-  window: proc(ctx: rawptr) -> Win,
 
   fresh_start: proc() -> (ctx: rawptr, ok: bool),
 
@@ -23,8 +25,9 @@ PackageApi :: struct {
   reload: proc(ctx: rawptr) -> (ok: bool),
 
   destroy: proc(ctx: rawptr),
-	shutdown_window: proc(win: Win),
 }
+
+
 
 load_target :: proc (opts: OdinOptions) -> (
   api: ^PackageApi,
@@ -43,7 +46,7 @@ load_target :: proc (opts: OdinOptions) -> (
   _, ok := dyn.initialize_symbols(api, dll_name, "", "lib")
 
   if !ok {
-    print_err("Could not load library")
+    print.err("Could not load library")
     err = .ELIBACC
   }
 
@@ -70,7 +73,7 @@ reload_target :: proc (
   if !ok {
     err = .ELIBACC
 
-    print_err("Failed to initialize library symbols: %v",
+    print.err("Failed to initialize library symbols: %v",
       dyn.last_error())
 
     return
@@ -80,7 +83,7 @@ reload_target :: proc (
   reload_ok := api.reload(ctx)
 
   if !reload_ok {
-    print_err("Could not reload library!")
+    print.err("Could not reload library!")
     err = .ELIBACC
     return
   }
@@ -92,7 +95,7 @@ unload_target :: proc (api: ^PackageApi) -> Err {
   ok := dyn.unload_library(api.lib)
 
   if !ok {
-    print_err("Failed to unload library: %v",
+    print.err("Failed to unload library: %v",
       dyn.last_error())
     return .ECANCELED
   }

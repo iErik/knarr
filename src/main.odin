@@ -5,26 +5,13 @@ import "core:encoding/json"
 import "core:sync/chan"
 import sys "core:sys/linux"
 
-import glfw "vendor:glfw"
+import "root:print"
 
-
-Win :: glfw.WindowHandle
 Err :: sys.Errno
 
-HMROptions :: struct {
-  pkgPath:   string,
-  pkgName:   string,
-  outDir:    string,
-  extradirs: []string,
-  pkgSuffix: string, //#
-  pkgPrefix: string, // #
-
-  buildArgs: string, // #
-  collections: []string,
-
-  __version: i32 // #
-}
-
+// TODO : INTRODUCE THE POSSIBILITY OF DECLARING
+// A "LIBRARY" DIRECTORY (E.G. "~/OdinPkgs") WHERE
+// SHARED LIBS ARE PLACED, CALL IT LIBS!
 
 watch :: proc (options: TaskOptions) {
   odin_opts := OdinOptions {
@@ -45,18 +32,9 @@ watch :: proc (options: TaskOptions) {
   }
 
   result, cmd_err := odin_do(.BUILD, odin_opts)
-  api, api_err := load_target(odin_opts)
-  output, js_err := json.parse_string(result.output)
-
-  if api_err != .NONE {
-    print_err(
-      "Received API Error %s. Process exiting",
-      api_err)
-
-    return
-  }
-
-  ctx, err := api.fresh_start()
+  output, js_err  := json.parse_string(result.output)
+  api, dll_err    := load_target(odin_opts)
+  ctx, ok_start   := api.fresh_start()
   api.ctx = ctx
   odin_opts.version += 1
 
@@ -65,26 +43,44 @@ watch :: proc (options: TaskOptions) {
     ch: chan.Chan(bool)
   ) { ok := chan.try_send(ch, true) }
 
-  dirSet := FakeSet{ options.pkgRoot = {} }
-  add_keys(options.watchDirs, &dirSet)
-  paths, _ := map_keys(dirSet)
+  dirs := FakeSet{ options.pkgRoot = {} }
+  set_push(options.pkgRoot, &dirs)
+  set_push(options.watchDirs, &dirs)
 
-  thr, chn, wErr := async_watch(paths, listener)
+  thr, chn, watch_err := async_watch(
+    set_items(dirs), listener)
 
-  if wErr != .NONE {
-    print_err("Async watch error!")
+  switch {
+    case cmd_err != .NONE:
+      print.err("Failed to compile package: %s", cmd_err)
+      return
+    case js_err  != .None:
+      print.err("Failed to parse build output: %s", cmd_err)
+      return
+    case dll_err != .NONE:
+      print.err("Failed to load package dynamically: %s",
+        dll_err)
+      return
+    case !ok_start:
+      print.err("Failed to start application!")
+      return
+    case watch_err != .NONE:
+      print.err("Failed to setup file watcher: %s",
+        watch_err)
+      return
   }
 
   for api.should_loop(api.ctx) {
     should_reload, ok := chan.try_recv(chn)
 
     if should_reload {
-      print_info("Application should reload now!")
+      print.info("Application should reload now!")
+
       odin_do(.BUILD, odin_opts)
       new_api, errno := reload_target(api.ctx, odin_opts)
 
       if errno != .NONE {
-        print_err("Could not reload target: %s", err)
+        print.err("Could not reload target: %s", errno)
       }
 
       odin_opts.version += 1
@@ -109,7 +105,7 @@ run :: proc (options: TaskOptions) {
     extraArgs = "-debug"
   }
 
-  fmt.printfln("Running...")
+  print.info("Running with options:\n%v\n", options)
   odin_do(.RUN, odin_opts)
 
   return
@@ -138,9 +134,6 @@ build :: proc (options: TaskOptions) {
 main :: proc () {
   task, options, ok := get_args()
 
-  fmt.printfln("Task: %s", task)
-  fmt.printfln("Options: %v", options)
-
   if !ok do return
 
   switch task {
@@ -152,23 +145,4 @@ main :: proc () {
 
   return
 }
-
-  /*
-  options := HMROptions {
-    pkgPath   = "./src",
-    pkgName   = "geenie",
-    outDir    = ".tmp/",
-    pkgSuffix = "_hmr",
-    pkgPrefix = "tmp_",
-
-    extradirs = []string{"./shaders", "./assets"},
-
-    buildArgs = strjoin({
-      "-collection:gini=./src/gini",
-      "-collection:package=./src"
-    }, " ")
-  }
-
-  watch(options)
-  */
 

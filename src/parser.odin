@@ -7,6 +7,8 @@ import "core:encoding/ini"
 import "core:os"
 import fl "core:flags"
 
+import "root:print"
+
 read_from_filename :: os.read_entire_file_from_filename
 read_from_handle :: os.read_entire_file_from_handle
 
@@ -65,7 +67,7 @@ map_from_buffer :: proc (buffer: []u8) -> (
   raw_map, err = map_from_str(contents, context.allocator)
 
   if err != .None {
-    fmt.printfln(
+    print.err(
       "Allocator error while parsing" +
       "configuration file: %s", err)
 
@@ -82,9 +84,7 @@ parse_map :: proc (config: ini.Map) -> (
 ) {
   for key in REQUIRED_KEYS {
     if has_key(key, config) do continue
-
-    fmt.eprintfln("Configuration key \"%v\" is missing!",
-      key)
+    print.err("Configuration key \"%v\" is missing!", key)
 
     ok = false
     return
@@ -140,7 +140,7 @@ get_args :: proc () -> (
   ok: bool = true
 ) {
   if len(os.args) <= 1 {
-    fmt.printfln("You must provide me a task.")
+    print.err("You must provide me a task.")
     ok = false
     return
   }
@@ -150,7 +150,7 @@ get_args :: proc () -> (
     case BUILD_CMD: task = .BUILD
     case WATCH_CMD: task = .WATCH
     case:
-      fmt.printfln("Invalid task: %v", os.args[1])
+      print.err("Invalid task: %v", os.args[1])
       ok = false
       return
   }

@@ -13,6 +13,8 @@ import "core:slice"
 import "core:sys/posix"
 import sys "core:sys/linux"
 
+import "root:print"
+
 MAX_NAME_LEN :: 256
 EVENT_SIZE   :: size_of(sys.Inotify_Event)
 BUFFER_SIZE  :: EVENT_SIZE + MAX_NAME_LEN
@@ -46,7 +48,7 @@ read_next_event :: proc (fd: sys.Fd) -> (
   blen, err = sys.read(fd, buffer[:])
 
   if err != .NONE {
-    print_err("Error reading from file descriptor: %s", err)
+    print.err("Error reading from file descriptor: %s", err)
     return
   }
 
@@ -67,11 +69,11 @@ read_next_event :: proc (fd: sys.Fd) -> (
 
   bufferSize := int(EVENT_SIZE + ev.len)
 
-  print_warn("Buffer Size: %v  || BLEN: %v || EV.LEN: %v",
+  print.warn("Buffer Size: %v  || BLEN: %v || EV.LEN: %v",
     bufferSize, blen, ev.len)
 
   if bufferSize < blen {
-    print_warn(
+    print.warn(
       "Warn: Number of bytes received exceeds " +
       "Event struct size, potentially ignored one message")
   }
@@ -101,7 +103,7 @@ list_dirs :: proc (
   defer posix.free(list)
 
   if ret < 0 {
-    print_err("Could not scan directory %v: %v",
+    print.err("Could not scan directory %v: %v",
       pathname, string(posix.strerror(posix.errno())))
 
     ok = false
@@ -177,7 +179,7 @@ async_watch :: proc (
   inotifyFd, inErr := sys.inotify_init1({.CLOEXEC})
 
   if inErr != .NONE {
-    print_err(
+    print.err(
       "An error has occurred while attempting to " +
       "open the inotify file descriptor: %s", inErr)
 
@@ -188,14 +190,12 @@ async_watch :: proc (
   subdirs, ok := dirs_iterate(pathnames)
 
   if !ok {
-    print_err("Could not get subdirectories!")
+    print.err("Could not get subdirectories!")
     return
   }
 
   allDirs := slicecat([][]string{ subdirs, pathnames })
   watchMap :map[sys.Wd]string
-
-  print_info("All dirs: %v", allDirs)
 
   for path in allDirs {
     wd, pErr := sys.inotify_add_watch(
@@ -204,8 +204,7 @@ async_watch :: proc (
       events)
 
     if pErr != .NONE {
-      print_err(
-        "Failed to register watcher for \"%v\": %s",
+      print.err("Failed to register watcher for \"%v\": %s",
         path, pErr)
 
       err = pErr
@@ -218,24 +217,20 @@ async_watch :: proc (
   thr := thread.create(proc (thr: ^thread.Thread) {
     t := time.tick_now()
     data := cast(^ThreadData) thr.data
-    cb := data.callback
-    channel := data.channel
-    fd := data.fd
-    watchMap := data.watchMap
-    watchEvents := data.watchEvents
+    using data
+
+    defer sys.close(fd)
+    defer free(thr.data)
 
     for {
-      print_info("Waiting for next event...")
       event, err := read_next_event(fd)
 
       if err != .NONE {
-        print_err("Error reading file descriptor: %s", err)
+        print.err("Error reading file descriptor: %s", err)
         break
       }
 
       isdir := .ISDIR in event.mask
-
-      print_info("Events: %v", watchEvents)
 
       if isdir && .CREATE in event.mask {
         path := strjoin({
@@ -243,46 +238,31 @@ async_watch :: proc (
           event.name
         }, "/")
 
-        print_info("Path add: %v", path)
-
         wd, pErr := sys.inotify_add_watch(
           fd,
           strcclone(path),
           watchEvents)
 
-        if pErr != .NONE {
-          print_err(
-            "Failed to register watcher for \"%v\": %s",
-            path, pErr)
-        } else {
-          watchMap[wd] = path
-        }
+        if pErr != .NONE do print.err(
+          "Failed to register watcher for \"%v\": %s",
+          path, pErr)
+        else do watchMap[wd] = path
       }
 
       if isdir && .DELETE in event.mask {
         err := sys.inotify_rm_watch(fd, event.wd)
-        print_info("Deleting %v", event.wd)
 
-        if err != .NONE do print_err(
+        if err != .NONE do print.err(
           "Couldn't remove file watcher for \"%v\": %s",
           event.name, err)
       }
-
-      print_info("Event: %v", event)
 
       diff := time.tick_lap_time(&t)
       ms := time.duration_milliseconds(diff)
 
       // Debounce by 300ms
-      print_info("Making a call")
-      if ms > 300.0 do cb(event, channel)
-      print_info("Finished call")
+      if ms > 300.0 do callback(event, channel)
     }
-
-    print_info("Loop exited")
-
-    sys.close(fd)
-    free(thr.data)
   })
 
   chanErr :runtime.Allocator_Error
@@ -291,7 +271,7 @@ async_watch :: proc (
     context.allocator)
 
   if chanErr != .None {
-    print_err("Could no allocate channel: %s", chanErr)
+    print.err("Could no allocate channel: %s", chanErr)
     // TODO: Delete inotify handle
     err = .ENOMEM
     return
@@ -322,7 +302,7 @@ sync_watch :: proc (
   inotifyFd, err := sys.inotify_init()
 
   if err != .NONE {
-    print_err(
+    print.err(
       "An error has occurred while attempting to " +
       "open the inotify file descriptor.")
 
@@ -334,7 +314,7 @@ sync_watch :: proc (
     strings.clone_to_cstring(pathname), events)
 
   if wdErr != .NONE {
-     print_err(
+     print.err(
       "An error has occurred while attempting to " +
       "watch the package for changes.")
 
@@ -345,7 +325,7 @@ sync_watch :: proc (
     event, err := read_next_event(inotifyFd)
 
     if err != .NONE {
-      print_err("Error reading file descriptor: %s", err)
+      print.err("Error reading file descriptor: %s", err)
       return err
     }
 

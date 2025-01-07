@@ -1,6 +1,5 @@
 package knarr
 
-import "core:encoding/ansi"
 import "core:fmt"
 import "core:strings"
 
@@ -9,6 +8,10 @@ import "core:sys/posix"
 import sys "core:sys/linux"
 
 import "core:os"
+
+import "root:print"
+
+
 
 strcat   :: strings.concatenate
 strjoin  :: strings.join
@@ -19,50 +22,7 @@ ptrtostr :: strings.string_from_ptr
 slicecat :: slice.concatenate
 map_keys :: slice.map_keys
 
-PrintArg :: struct {
-  format: string,
-  value: any
-}
 
-print_err :: proc (msg: string, args: ..any) {
-  msg := strcat({
-    ansi.CSI + ansi.BOLD + ";" + ansi.FG_RED + ansi.SGR,
-    msg,
-    ansi.CSI + ansi.RESET + ansi.SGR
-  })
-
-  fmt.eprintfln(msg, ..args)
-}
-
-print_warn :: proc (msg: string, args: ..any) {
-  msg := strcat({
-    ansi.CSI + ansi.BOLD + ";" + ansi.FG_YELLOW + ansi.SGR,
-    msg,
-    ansi.CSI + ansi.RESET + ansi.SGR
-  })
-
-  fmt.printfln(msg, ..args)
-}
-
-print_info :: proc (msg: string, args: ..any) {
-  msg := strcat({
-    ansi.CSI + ansi.BOLD + ";" + ansi.FG_BLUE + ansi.SGR,
-    msg,
-    ansi.CSI + ansi.RESET + ansi.SGR
-  })
-
-  fmt.printfln(msg, ..args)
-}
-
-print_msg :: proc (msg: string, args: ..any) {
-  msg := strcat({
-    ansi.CSI + ansi.BOLD + ";" + ansi.FG_GREEN + ansi.SGR,
-    msg,
-    ansi.CSI + ansi.RESET + ansi.SGR
-  })
-
-  fmt.printfln(msg, ..args)
-}
 
 fgets :: proc (src: ^posix.FILE, buffer: []u8) -> [^]u8 {
   return posix.fgets(
@@ -76,17 +36,16 @@ CmdResult :: struct {
   status: i32
 }
 
-run_cmd :: proc (cmd: string) -> (
+run_cmd :: proc (cmd: string, redirect: bool = false) -> (
   result: CmdResult,
   err: Err,
 ) {
-  //red := strings.clone_to_cstring(strcat({cmd, " 2>&1"}))
-  //pipe := posix.popen(red, "r")
-  // TODO: Sort that out
+  cmd := cmd
+  if redirect do cmd = strcat({cmd, " 2>&1"})
   pipe := posix.popen(strcclone(cmd), "r")
 
   if pipe == nil {
-    print_err("Couldn't spawn command %v", cmd)
+    print.err("Couldn't spawn command %v", cmd)
     err = sys.Errno(posix.get_errno())
     return
   }
@@ -95,7 +54,7 @@ run_cmd :: proc (cmd: string) -> (
   for fgets(pipe, temp[:]) != nil {
     result.output = strcat({
       result.output,
-      strings.trim_null(strings.clone_from_bytes(temp[:]))
+      strings.trim_null(bytetostr(temp[:]))
     })
 
     temp = {}
@@ -110,7 +69,7 @@ ensure_dir_exists :: proc (dirname: string) -> (ok: bool) {
   err := os.make_directory(dirname)
 
   if err != os.ERROR_NONE {
-    fmt.printfln("Failed to create directory \"%v\": %s",
+    print.err("Failed to create directory \"%v\": %s",
       dirname, err)
 
     return false
@@ -119,9 +78,25 @@ ensure_dir_exists :: proc (dirname: string) -> (ok: bool) {
   return true
 }
 
+// FakeSet
+// -------
+
 FakeSet :: map[string]struct{}
 
-add_keys :: proc (keys: []string, dest: ^FakeSet) {
+set_push_one :: proc (key: string, dest: ^FakeSet) {
+  dest[key] = {}
+}
+
+set_push_many :: proc (keys: []string, dest: ^FakeSet) {
   for key in keys do dest[key] = {}
 }
 
+set_push :: proc {
+  set_push_one,
+  set_push_many,
+}
+
+set_items :: proc (set: FakeSet) -> []string {
+  items, _ := map_keys(set)
+  return items
+}
