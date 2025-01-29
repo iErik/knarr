@@ -19,13 +19,15 @@ Task :: enum {
   BUILD,
   WATCH,
   RUN,
-  INSTALL
+  INSTALL,
+  INIT
 }
 
-RUN_CMD   :: "run"
-BUILD_CMD :: "build"
-WATCH_CMD :: "watch"
-INSTALL   :: "install"
+RUN_CMD     :: "run"
+BUILD_CMD   :: "build"
+WATCH_CMD   :: "watch"
+INSTALL_CMD :: "install"
+INIT_CMD    :: "init"
 
 CmdFlags :: struct {
   config: os.Handle `args:"file=r"`
